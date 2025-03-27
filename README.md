@@ -92,8 +92,6 @@ For more examples, please refer to the [examples](https://github.com/imor/pg_rep
 
 The `pg_replicate` crate has the following features:
 
-* duckdb
-* bigquery
 * stdout
 
 Each feature enables the corresponding sink of the same name.
@@ -114,9 +112,7 @@ If you are inside the `pg_replicate` folder inside the root, then you can omit t
 
 The repository is a cargo workspace. Each of the individual sub-folders are crate in the workspace. A brief explanation of each crate is as follows:
 
-- `api` - REST api used for hosting `pg_replicate` in a cloud environment.
 - `pg_replicate` - The main library crate containing the core logic.
-- `replicator` - A binary crate using `pg_replicate`. Packaged as a docker container for use in cloud hosting.
 
 ## Roadmap
 
@@ -136,10 +132,6 @@ See the [open issues](https://github.com/imor/pg_replicate/issues) for a full li
 ## License
 
 Distributed under the Apache-2.0 License. See `LICENSE` for more information.
-
-## Docker
-
-To create the docker image for `replicator` run `docker build -f ./replicator/Dockerfile .` from the root of the repo. Similarly, to create the docker image for `api` run `docker build -f ./api/Dockerfile .`.
 
 ## Design
 
