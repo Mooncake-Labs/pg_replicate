@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Example - stdout",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--package=pg_replicate",
+                    "--example=stdout",
+                    "--features=stdout"
+                ]
+            },
+            "args": [
+                "--db-host=localhost",
+                "--db-port=5432",
+                "--db-name=postgres",
+                "--db-username=postgres",
+                "--db-password=password",
+                "cdc",
+                "pub",
+                "stdout_slot"
+            ]
+        }
+    ]
+}
