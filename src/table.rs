@@ -34,6 +34,12 @@ pub struct ColumnSchema {
     pub primary: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum LookupKey {
+    Key { name: String, columns: Vec<String> },
+    FullRow,
+}
+
 pub type TableId = u32;
 
 #[derive(Debug, Clone)]
@@ -41,6 +47,7 @@ pub struct TableSchema {
     pub table_name: TableName,
     pub table_id: TableId,
     pub column_schemas: Vec<ColumnSchema>,
+    pub lookup_key: LookupKey,
 }
 
 impl TableSchema {
