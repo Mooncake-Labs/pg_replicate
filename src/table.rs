@@ -51,7 +51,16 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
-    pub fn has_primary_keys(&self) -> bool {
-        self.column_schemas.iter().any(|cs| cs.primary)
+    pub fn has_safe_lookup_key(&self) -> bool {
+        match &self.lookup_key {
+            LookupKey::FullRow => {
+                // At least one published column must be NOT NULL
+                self.column_schemas.iter().any(|c| !c.nullable)
+            }
+            _ => true,
+        }
+    }
+}
+
     }
 }
