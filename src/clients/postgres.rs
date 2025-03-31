@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pg_escape::{quote_identifier, quote_literal};
 use postgres_replication::LogicalReplicationStream;
@@ -10,7 +10,7 @@ use tokio_postgres::{
 };
 use tracing::{info, warn};
 
-use crate::table::{ColumnSchema, TableId, TableName, TableSchema};
+use crate::table::{ColumnSchema, LookupKey, TableId, TableName, TableSchema};
 
 pub struct SlotInfo {
     pub confirmed_flush_lsn: PgLsn,
@@ -264,6 +264,93 @@ impl ReplicationClient {
         Ok(column_schemas)
     }
 
+    // helper function to get the unique index key of a table
+    async fn get_unique_index_key(
+        &self,
+        table_id: TableId,
+        published_column_names: HashSet<String>,
+    ) -> Result<Option<LookupKey>, ReplicationClientError> {
+        let unique_key_query = format!(
+            "
+            SELECT
+                c2.relname AS index_name,
+                ARRAY_AGG(a.attname ORDER BY x.ordinality) AS columns
+            FROM pg_index i
+            JOIN pg_class c1 ON c1.oid = i.indrelid
+            JOIN pg_class c2 ON c2.oid = i.indexrelid
+            JOIN unnest(i.indkey) WITH ORDINALITY AS x(attnum, ordinality)
+            JOIN pg_attribute a ON a.attrelid = c1.oid AND a.attnum = x.attnum
+            WHERE c1.oid = {table_id}
+            AND i.indisunique
+            AND NOT i.indisprimary
+            AND i.indpred IS NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM unnest(i.indkey) attnum
+                JOIN pg_attribute a2 ON a2.attrelid = c1.oid AND a2.attnum = attnum
+                WHERE a2.attnotnull = false
+            )
+            GROUP BY c2.relname
+            ORDER BY c2.relname
+            LIMIT 1
+            ",
+        );
+
+        for message in self.postgres_client.simple_query(&unique_key_query).await? {
+            if let SimpleQueryMessage::Row(row) = message {
+                let index_name: String =
+                    row.get("index_name").unwrap_or("unnamed_index").to_string();
+                let columns: Vec<String> = row
+                    .get("columns")
+                    .unwrap_or("")
+                    .trim_matches('{')
+                    .trim_matches('}')
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect();
+
+                if columns
+                    .iter()
+                    .all(|name| published_column_names.contains(name.as_str()))
+                {
+                    return Ok(Some(LookupKey::Key {
+                        name: index_name,
+                        columns,
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn get_lookup_key(
+        &self,
+        table_id: TableId,
+        column_schemas: &Vec<ColumnSchema>,
+    ) -> Result<LookupKey, ReplicationClientError> {
+        let primary_key: Vec<ColumnSchema> = column_schemas
+            .iter()
+            .filter(|cs| cs.primary)
+            .cloned()
+            .collect();
+        if !primary_key.is_empty() {
+            let lookup_key = LookupKey::Key {
+                name: "primary_key".to_string(),
+                columns: primary_key.iter().map(|cs| cs.name.clone()).collect(),
+            };
+            return Ok(lookup_key);
+        }
+
+        // fall back to unique index
+        let column_names: HashSet<String> =
+            column_schemas.iter().map(|cs| cs.name.clone()).collect();
+        if let Some(unique_index_key) = self.get_unique_index_key(table_id, column_names).await? {
+            return Ok(unique_index_key);
+        }
+
+        // default to full row
+        Ok(LookupKey::FullRow)
+    }
+
     pub async fn get_table_schemas(
         &self,
         table_names: &[TableName],
@@ -297,12 +384,17 @@ impl ReplicationClient {
             .get_table_id(&table_name)
             .await?
             .ok_or(ReplicationClientError::MissingTable(table_name.clone()))?;
+
         let column_schemas = self.get_column_schemas(table_id, publication).await?;
-        Ok(TableSchema {
+        let lookup_key = self.get_lookup_key(table_id, &column_schemas).await?;
+
+        let table_schema = TableSchema {
             table_name,
             table_id,
             column_schemas,
-        })
+            lookup_key,
+        };
+        Ok(table_schema)
     }
 
     /// Returns the table id (called relation id in Postgres) of a table
