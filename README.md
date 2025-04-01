@@ -19,7 +19,7 @@ cargo run -p pg_replicate --example stdout --features="stdout" -- --db-host loca
 
 In the above example, `pg_replicate` connects to a Postgres database named `postgres` running on `localhost:5432` with a username `postgres` and password `password`. The slot name `stdout_slot` will be created by `pg_replicate` automatically.
 
-Refer to the [examples](https://github.com/supabase/pg_replicate/tree/main/pg_replicate/examples) folder to run examples for sinks other than `stdout` (currently only `bigquery` and `duckdb` supported). A quick tip: to see all the command line options, run the example wihout any options specified, e.g. `cargo run --example bigquery` will print the detailed usage instructions for the `bigquery` sink.
+A quick tip: to see all the command line options, run the example wihout any options specified, e.g. `cargo run --example stdout` will print the detailed usage instructions for the `stdout` sink.
 
 ## Getting Started
 
@@ -104,34 +104,31 @@ To run the `pg_replicate` examples from the root of the repository, use the foll
 
 In the above command we ask cargo to run the examples from the `pg_replicate` crate in the workspace. We also enable the right features needed for the example. Usually the feature is named the same as the example. E.g.:
 
-`cargo run -p pg_replicate --example duckdb --features="duckdb"`
+`cargo run -p pg_replicate --example stdout --features="stdout"`
 
 If you are inside the `pg_replicate` folder inside the root, then you can omit the `-p pg_replicate` part from the command.
+
+## Testing
+
+To run the integration tests use
+
+```
+docker-compose up -d
+```
+
+to start the postgres server and then use
+
+```
+cargo test
+```
+
+as normal.
 
 ## Repository Structure
 
 The repository is a cargo workspace. Each of the individual sub-folders are crate in the workspace. A brief explanation of each crate is as follows:
 
-- `pg_replicate` - The main library crate containing the core logic.
-
-## Roadmap
-
-`pg_replicate` is still under heavy development so expect bugs and papercuts but overtime we plan to add the following sinks.
-
-- [x] Add BigQuery Sink
-- [x] Add DuckDb Sink
-- [x] Add MotherDuck Sink
-- [ ] Add Snowflake Sink
-- [ ] Add ClickHouse Sink
-- [ ] Many more to come...
-
-Note: DuckDb and MotherDuck sinks do no use the batched pipeline, hence they currently perform poorly. A batched pipeline version of these sinks is planned.
-
-See the [open issues](https://github.com/imor/pg_replicate/issues) for a full list of proposed features (and known issues).
-
-## License
-
-Distributed under the Apache-2.0 License. See `LICENSE` for more information.
+* `pg_replicate` - The main library crate containing the core logic.
 
 ## Design
 
