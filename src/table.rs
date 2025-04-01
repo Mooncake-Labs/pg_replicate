@@ -49,14 +49,4 @@ pub struct TableSchema {
     pub lookup_key: LookupKey,
 }
 
-impl TableSchema {
-    pub fn has_safe_lookup_key(&self) -> bool {
-        match &self.lookup_key {
-            LookupKey::FullRow => {
-                // All columns must be non-nullable
-                self.column_schemas.iter().all(|col| col.nullable == false)
-            }
-            _ => true,
-        }
-    }
-}
+impl TableSchema {}

@@ -339,13 +339,6 @@ impl ReplicationClient {
             let table_schema = self
                 .get_table_schema(table_name.clone(), publication)
                 .await?;
-            if !table_schema.has_safe_lookup_key() {
-                warn!(
-                    "table {} with id {} will not be copied because it has no primary key",
-                    table_schema.table_name, table_schema.table_id
-                );
-                continue;
-            }
             table_schemas.insert(table_schema.table_id, table_schema);
         }
 
