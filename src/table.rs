@@ -31,7 +31,6 @@ pub struct ColumnSchema {
     pub typ: Type,
     pub modifier: TypeModifier,
     pub nullable: bool,
-    pub primary: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,8 +58,5 @@ impl TableSchema {
             }
             _ => true,
         }
-    }
-}
-
     }
 }

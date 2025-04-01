@@ -243,20 +243,11 @@ impl ReplicationClient {
                         ))?
                         == "f";
 
-                let primary =
-                    row.try_get("primary")?
-                        .ok_or(ReplicationClientError::MissingColumn(
-                            "indisprimary".to_string(),
-                            "pg_index".to_string(),
-                        ))?
-                        == "t";
-
                 column_schemas.push(ColumnSchema {
                     name,
                     typ,
                     modifier,
                     nullable,
-                    primary,
                 })
             }
         }
@@ -265,37 +256,37 @@ impl ReplicationClient {
     }
 
     // helper function to get the unique index key of a table
-    async fn get_unique_index_key(
+    async fn query_lookup_key(
         &self,
         table_id: TableId,
         published_column_names: HashSet<String>,
     ) -> Result<Option<LookupKey>, ReplicationClientError> {
-        let unique_key_query = format!(
+        let key_query = format!(
             "
             SELECT
                 c2.relname AS index_name,
-                ARRAY_AGG(a.attname ORDER BY x.ordinality) AS columns
+                ARRAY_AGG(a.attname ORDER BY x.ordinality) AS columns,
+                i.indisprimary AS is_primary
             FROM pg_index i
             JOIN pg_class c1 ON c1.oid = i.indrelid
             JOIN pg_class c2 ON c2.oid = i.indexrelid
             JOIN unnest(i.indkey) WITH ORDINALITY AS x(attnum, ordinality)
             JOIN pg_attribute a ON a.attrelid = c1.oid AND a.attnum = x.attnum
             WHERE c1.oid = {table_id}
-            AND i.indisunique
-            AND NOT i.indisprimary
+            AND (i.indisunique OR i.indisprimary)
             AND i.indpred IS NULL
             AND NOT EXISTS (
                 SELECT 1 FROM unnest(i.indkey) attnum
                 JOIN pg_attribute a2 ON a2.attrelid = c1.oid AND a2.attnum = attnum
                 WHERE a2.attnotnull = false
             )
-            GROUP BY c2.relname
-            ORDER BY c2.relname
+            GROUP BY c2.relname, i.indisprimary
+            ORDER BY i.indisprimary DESC, c2.relname
             LIMIT 1
             ",
         );
 
-        for message in self.postgres_client.simple_query(&unique_key_query).await? {
+        for message in self.postgres_client.simple_query(&key_query).await? {
             if let SimpleQueryMessage::Row(row) = message {
                 let index_name: String =
                     row.get("index_name").unwrap_or("unnamed_index").to_string();
@@ -327,23 +318,9 @@ impl ReplicationClient {
         table_id: TableId,
         column_schemas: &Vec<ColumnSchema>,
     ) -> Result<LookupKey, ReplicationClientError> {
-        let primary_key: Vec<ColumnSchema> = column_schemas
-            .iter()
-            .filter(|cs| cs.primary)
-            .cloned()
-            .collect();
-        if !primary_key.is_empty() {
-            let lookup_key = LookupKey::Key {
-                name: "primary_key".to_string(),
-                columns: primary_key.iter().map(|cs| cs.name.clone()).collect(),
-            };
-            return Ok(lookup_key);
-        }
-
-        // fall back to unique index
         let column_names: HashSet<String> =
             column_schemas.iter().map(|cs| cs.name.clone()).collect();
-        if let Some(unique_index_key) = self.get_unique_index_key(table_id, column_names).await? {
+        if let Some(unique_index_key) = self.query_lookup_key(table_id, column_names).await? {
             return Ok(unique_index_key);
         }
 
