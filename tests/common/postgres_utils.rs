@@ -29,4 +29,3 @@ pub async fn wait_for_postgres_ready() {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
-

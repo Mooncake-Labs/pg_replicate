@@ -1,6 +1,7 @@
+mod clients;
 mod common;
 
-use common::postgres::{postgres_connection_string, wait_for_postgres_ready};
+use common::postgres_utils::{postgres_connection_string, wait_for_postgres_ready};
 
 #[tokio::test]
 async fn test_basic_logical_replication() {
