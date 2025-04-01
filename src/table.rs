@@ -54,8 +54,8 @@ impl TableSchema {
     pub fn has_safe_lookup_key(&self) -> bool {
         match &self.lookup_key {
             LookupKey::FullRow => {
-                // At least one published column must be NOT NULL
-                self.column_schemas.iter().any(|c| !c.nullable)
+                // All columns must be non-nullable
+                self.column_schemas.iter().all(|col| col.nullable == false)
             }
             _ => true,
         }
