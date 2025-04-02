@@ -300,6 +300,9 @@ impl ReplicationClient {
         Ok(None)
     }
 
+    /// A valid index for replica identity
+    /// must be unique, not partial, not deferrable, and include only columns marked NOT NULL.
+    /// As per [https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY]
     async fn fetch_index_rows(
         &self,
         table_id: TableId,
@@ -308,13 +311,19 @@ impl ReplicationClient {
             "
             SELECT
                 c2.relname AS index_name,
-                i.indkey
+                i.indkey,
+                i.indisunique,
+                i.indisprimary,
+                i.indpred IS NOT NULL AS is_partial,
+                COALESCE(con.condeferrable, false) AS is_deferrable
             FROM pg_index i
             JOIN pg_class c1 ON c1.oid = i.indrelid
             JOIN pg_class c2 ON c2.oid = i.indexrelid
+            LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
             WHERE c1.oid = {}
             AND (i.indisunique OR i.indisprimary)
             AND i.indpred IS NULL
+            AND (con.condeferrable IS NULL OR con.condeferrable = false)
             ORDER BY i.indisprimary DESC, c2.relname
             ",
             table_id
