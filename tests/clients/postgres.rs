@@ -42,7 +42,7 @@ async fn test_lookup_key_with_unique_constraint() -> Result<(), anyhow::Error> {
     let create_sql = "
         CREATE TABLE test_unique_constraint_table (
             id INT,
-            email TEXT UNIQUE,
+            email TEXT NOT NULL UNIQUE,
             data TEXT
         )
     ";
@@ -137,8 +137,8 @@ async fn test_lookup_key_with_no_unique_constraints() -> Result<(), anyhow::Erro
 async fn test_lookup_key_with_multicolumn_unique_index() -> Result<(), anyhow::Error> {
     let create_sql = "
         CREATE TABLE test_multicolumn_unique_index (
-            first_name TEXT,
-            last_name TEXT,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
             email TEXT,
             data TEXT,
             CONSTRAINT unique_name UNIQUE (first_name, last_name)
@@ -163,7 +163,7 @@ async fn test_lookup_key_respects_publication_columns() -> Result<(), anyhow::Er
         "
         CREATE TABLE {} (
             id INT PRIMARY KEY,
-            email TEXT UNIQUE,
+            email TEXT NOT NULL UNIQUE,
             data TEXT
         )
         ",
@@ -226,8 +226,8 @@ async fn test_lookup_key_with_multiple_unique_indexes() -> Result<(), anyhow::Er
     let create_sql = "
         CREATE TABLE test_multiple_unique_indexes (
             id INT,
-            username TEXT UNIQUE,
-            email TEXT UNIQUE,
+            username TEXT NOT NULL UNIQUE,
+            email TEXT NOT NULL UNIQUE,
             data TEXT
         )
     ";
