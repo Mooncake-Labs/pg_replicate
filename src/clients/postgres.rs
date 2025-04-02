@@ -220,6 +220,7 @@ impl ReplicationClient {
                     .parse()
                     .map_err(|_| ReplicationClientError::OidColumnNotU32)?;
 
+                //TODO: For now we assume all types are simple, fix it later
                 let typ = Type::from_oid(type_oid).unwrap_or(Type::new(
                     format!("unnamed(oid: {type_oid})"),
                     type_oid,
@@ -300,9 +301,9 @@ impl ReplicationClient {
         Ok(None)
     }
 
-    /// A valid index for replica identity
+    /// Finds a valid index for lookup key
     /// must be unique, not partial, not deferrable, and include only columns marked NOT NULL.
-    /// As per [https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY]
+    /// Follows same definition as PG replica identity [https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY]
     async fn fetch_index_rows(
         &self,
         table_id: TableId,

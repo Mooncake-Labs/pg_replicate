@@ -170,10 +170,8 @@ async fn test_lookup_key_respects_publication_columns() -> Result<(), anyhow::Er
         table_name
     );
 
-    // Create a test table instance
     let test_table = TestTable::new(table_name, &create_sql).await;
 
-    // Create publication with column list
     test_table
         .client
         .simple_query(&format!("DROP PUBLICATION IF EXISTS {}", pub_name))
@@ -274,7 +272,6 @@ async fn test_lookup_key_with_no_columns_in_publication() -> Result<(), anyhow::
         table_name
     );
 
-    // Create a test table instance
     let test_table = TestTable::new(table_name, &create_sql).await;
 
     // Create a publication that only includes data column

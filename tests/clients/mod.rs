@@ -17,7 +17,6 @@ pub async fn create_replication_client() -> ReplicationClient {
     .expect("Failed to connect to postgres")
 }
 
-/// Helper function to assert that a LookupKey is a Key type with the expected columns
 pub fn assert_is_key(lookup_key: &LookupKey, expected_columns: &[&str]) {
     match lookup_key {
         LookupKey::Key { name: _, columns } => {
@@ -31,7 +30,6 @@ pub fn assert_is_key(lookup_key: &LookupKey, expected_columns: &[&str]) {
     }
 }
 
-/// Helper function to assert that a LookupKey is FullRow
 pub fn assert_is_full_row(lookup_key: &LookupKey) {
     match lookup_key {
         LookupKey::Key { name, columns } => {
