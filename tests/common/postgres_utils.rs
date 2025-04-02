@@ -33,18 +33,15 @@ impl Drop for TestTable {
     fn drop(&mut self) {
         let table = self.table.clone();
 
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async move {
-                match create_postgres_client()
-                    .await
-                    .simple_query(&format!("DROP TABLE IF EXISTS {} CASCADE", table))
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => eprintln!("Error dropping table {}: {}", table, e),
-                }
-            });
+        tokio::task::spawn(async move {
+            match create_postgres_client()
+                .await
+                .simple_query(&format!("DROP TABLE IF EXISTS {} CASCADE", table))
+                .await
+            {
+                Ok(_) => {}
+                Err(e) => eprintln!("Error dropping table {}: {}", table, e),
+            }
         });
     }
 }
