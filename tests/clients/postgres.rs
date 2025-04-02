@@ -323,3 +323,27 @@ async fn test_lookup_key_with_no_columns_in_publication() -> Result<(), anyhow::
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_lookup_key_ignores_deferrable_constraints() -> Result<(), anyhow::Error> {
+    let create_sql = "
+        CREATE TABLE test_deferrable_constraint_table (
+            id INT,
+            email TEXT NOT NULL,
+            username TEXT NOT NULL,
+            data TEXT,
+            CONSTRAINT deferrable_unique_email UNIQUE (email) DEFERRABLE,
+            CONSTRAINT non_deferrable_unique_username UNIQUE (username)
+        )
+    ";
+
+    // Should choose the non-deferrable unique constraint (username)
+    // and ignore the deferrable one (email)
+    test_lookup_key_with_definition(
+        "test_deferrable_constraint_table",
+        create_sql,
+        Some(vec!["username"]),
+        None,
+    )
+    .await
+}
