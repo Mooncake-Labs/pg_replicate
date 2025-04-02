@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pg_escape::{quote_identifier, quote_literal};
 use postgres_replication::LogicalReplicationStream;
@@ -6,11 +6,11 @@ use thiserror::Error;
 use tokio_postgres::{
     config::ReplicationMode,
     types::{Kind, PgLsn, Type},
-    Client as PostgresClient, Config, CopyOutStream, NoTls, SimpleQueryMessage,
+    Client as PostgresClient, Config, CopyOutStream, NoTls, SimpleQueryMessage, SimpleQueryRow,
 };
 use tracing::{info, warn};
 
-use crate::table::{ColumnSchema, TableId, TableName, TableSchema};
+use crate::table::{ColumnSchema, LookupKey, TableId, TableName, TableSchema};
 
 pub struct SlotInfo {
     pub confirmed_flush_lsn: PgLsn,
@@ -153,18 +153,19 @@ impl ReplicationClient {
             (
                 format!(
                     "with pub_attrs as (
-                        select unnest(r.prattrs)
+                        select unnest(r.prattrs) AS pub_attnum
                         from pg_publication_rel r
                         left join pg_publication p on r.prpubid = p.oid
-                        where p.pubname = {publication}
-                        and r.prrelid = {table_id}
+                        where p.pubname = {}
+                        and r.prrelid = {}
                     )",
-                    publication = quote_literal(publication),
+                    quote_literal(publication),
+                    table_id
                 ),
                 "and (
                     case (select count(*) from pub_attrs)
                     when 0 then true
-                    else (a.attnum in (select * from pub_attrs))
+                    else (a.attnum in (select pub_attnum from pub_attrs))
                     end
                 )",
             )
@@ -173,7 +174,7 @@ impl ReplicationClient {
         };
 
         let column_info_query = format!(
-            "{pub_cte}
+            "{}
             select a.attname,
                 a.atttypid,
                 a.atttypmod,
@@ -187,10 +188,11 @@ impl ReplicationClient {
             where a.attnum > 0::int2
             and not a.attisdropped
             and a.attgenerated = ''
-            and a.attrelid = {table_id}
-            {pub_pred}
+            and a.attrelid = {}
+            {}
             order by a.attnum
             ",
+            pub_cte, table_id, pub_pred
         );
 
         let mut column_schemas = vec![];
@@ -243,25 +245,146 @@ impl ReplicationClient {
                         ))?
                         == "f";
 
-                let primary =
-                    row.try_get("primary")?
-                        .ok_or(ReplicationClientError::MissingColumn(
-                            "indisprimary".to_string(),
-                            "pg_index".to_string(),
-                        ))?
-                        == "t";
-
                 column_schemas.push(ColumnSchema {
                     name,
                     typ,
                     modifier,
                     nullable,
-                    primary,
                 })
             }
         }
 
         Ok(column_schemas)
+    }
+
+    async fn fetch_lookup_key(
+        &self,
+        table_id: TableId,
+        published_column_names: HashSet<String>,
+    ) -> Result<Option<LookupKey>, ReplicationClientError> {
+        let index_rows = self.fetch_index_rows(table_id).await?;
+
+        for index_row in index_rows {
+            let index_name = match index_row.get("index_name") {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            let indkey = match index_row.get("indkey") {
+                Some(key) => key,
+                None => continue,
+            };
+
+            let column_infos = self.fetch_index_columns(table_id, indkey).await?;
+
+            let mut columns = Vec::new();
+            if column_infos.iter().any(|(_, not_null)| !not_null) {
+                continue;
+            }
+
+            for (col_name, _) in &column_infos {
+                columns.push(col_name.clone());
+            }
+
+            let all_columns_published = columns
+                .iter()
+                .all(|name| published_column_names.contains(name));
+
+            if all_columns_published {
+                return Ok(Some(LookupKey::Key {
+                    name: index_name,
+                    columns,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Finds a valid index for lookup key
+    /// must be unique, not partial, not deferrable, and include only columns marked NOT NULL.
+    /// Follows same definition as PG replica identity [https://www.postgresql.org/docs/current/sql-altertable.html#SQL-ALTERTABLE-REPLICA-IDENTITY]
+    async fn fetch_index_rows(
+        &self,
+        table_id: TableId,
+    ) -> Result<Vec<SimpleQueryRow>, ReplicationClientError> {
+        let query = format!(
+            "
+            SELECT
+                c2.relname AS index_name,
+                i.indkey,
+                i.indisunique,
+                i.indisprimary,
+                i.indpred IS NOT NULL AS is_partial,
+                COALESCE(con.condeferrable, false) AS is_deferrable
+            FROM pg_index i
+            JOIN pg_class c1 ON c1.oid = i.indrelid
+            JOIN pg_class c2 ON c2.oid = i.indexrelid
+            LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
+            WHERE c1.oid = {}
+            AND (i.indisunique OR i.indisprimary)
+            AND i.indpred IS NULL
+            AND (con.condeferrable IS NULL OR con.condeferrable = false)
+            ORDER BY i.indisprimary DESC, c2.relname
+            ",
+            table_id
+        );
+
+        let result = self.postgres_client.simple_query(&query).await?;
+
+        Ok(result
+            .into_iter()
+            .filter_map(|msg| match msg {
+                SimpleQueryMessage::Row(row) => Some(row),
+                _ => None,
+            })
+            .collect())
+    }
+
+    async fn fetch_index_columns(
+        &self,
+        table_id: TableId,
+        indkey: &str,
+    ) -> Result<Vec<(String, bool)>, ReplicationClientError> {
+        let query = format!(
+            "
+            SELECT a.attname, a.attnotnull
+            FROM pg_attribute a
+            WHERE a.attrelid = {}
+            AND a.attnum = ANY(string_to_array('{}', ' ')::smallint[])
+            ORDER BY array_position(string_to_array('{}', ' ')::smallint[], a.attnum)
+            ",
+            table_id, indkey, indkey
+        );
+
+        let result = self.postgres_client.simple_query(&query).await?;
+
+        Ok(result
+            .into_iter()
+            .filter_map(|msg| match msg {
+                SimpleQueryMessage::Row(row) => {
+                    let name = row.get("attname")?.to_string();
+                    let not_null = row.get("attnotnull") == Some("t");
+                    Some((name, not_null))
+                }
+                _ => None,
+            })
+            .collect())
+    }
+
+    pub async fn get_lookup_key(
+        &self,
+        table_id: TableId,
+        column_schemas: &Vec<ColumnSchema>,
+    ) -> Result<LookupKey, ReplicationClientError> {
+        let column_names: HashSet<String> =
+            column_schemas.iter().map(|cs| cs.name.clone()).collect();
+        if let Some(unique_index_key) = self.fetch_lookup_key(table_id, column_names).await? {
+            return Ok(unique_index_key);
+        }
+
+        // default to full row
+        Ok(LookupKey::FullRow)
     }
 
     pub async fn get_table_schemas(
@@ -275,13 +398,6 @@ impl ReplicationClient {
             let table_schema = self
                 .get_table_schema(table_name.clone(), publication)
                 .await?;
-            if !table_schema.has_primary_keys() {
-                warn!(
-                    "table {} with id {} will not be copied because it has no primary key",
-                    table_schema.table_name, table_schema.table_id
-                );
-                continue;
-            }
             table_schemas.insert(table_schema.table_id, table_schema);
         }
 
@@ -297,12 +413,17 @@ impl ReplicationClient {
             .get_table_id(&table_name)
             .await?
             .ok_or(ReplicationClientError::MissingTable(table_name.clone()))?;
+
         let column_schemas = self.get_column_schemas(table_id, publication).await?;
-        Ok(TableSchema {
+        let lookup_key = self.get_lookup_key(table_id, &column_schemas).await?;
+
+        let table_schema = TableSchema {
             table_name,
             table_id,
             column_schemas,
-        })
+            lookup_key,
+        };
+        Ok(table_schema)
     }
 
     /// Returns the table id (called relation id in Postgres) of a table
