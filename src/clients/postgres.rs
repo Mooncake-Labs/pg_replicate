@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio_postgres::{
     config::ReplicationMode,
     types::{Kind, PgLsn, Type},
-    Client as PostgresClient, Config, CopyOutStream, NoTls, SimpleQueryMessage,
+    Client as PostgresClient, Config, CopyOutStream, NoTls, SimpleQueryMessage, SimpleQueryRow,
 };
 use tracing::{info, warn};
 
@@ -256,74 +256,110 @@ impl ReplicationClient {
         Ok(column_schemas)
     }
 
-    // helper function to get the unique index key of a table
     async fn query_lookup_key(
         &self,
         table_id: TableId,
         published_column_names: HashSet<String>,
     ) -> Result<Option<LookupKey>, ReplicationClientError> {
-        let key_query = format!(
+        let index_rows = self.fetch_index_rows(table_id).await?;
+
+        for index_row in index_rows {
+            let index_name = match index_row.get("index_name") {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            let indkey = match index_row.get("indkey") {
+                Some(key) => key,
+                None => continue,
+            };
+
+            let column_infos = self.fetch_index_columns(table_id, indkey).await?;
+
+            let mut columns = Vec::new();
+            if column_infos.iter().any(|(_, not_null)| !not_null) {
+                continue;
+            }
+
+            for (col_name, _) in &column_infos {
+                columns.push(col_name.clone());
+            }
+
+            let all_columns_published = columns
+                .iter()
+                .all(|name| published_column_names.contains(name));
+
+            if all_columns_published {
+                return Ok(Some(LookupKey::Key {
+                    name: index_name,
+                    columns,
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn fetch_index_rows(
+        &self,
+        table_id: TableId,
+    ) -> Result<Vec<SimpleQueryRow>, ReplicationClientError> {
+        let query = format!(
             "
             SELECT
                 c2.relname AS index_name,
-                ARRAY_AGG(a.attname ORDER BY x.ordinality) AS columns,
-                i.indisprimary AS is_primary
+                i.indkey
             FROM pg_index i
             JOIN pg_class c1 ON c1.oid = i.indrelid
             JOIN pg_class c2 ON c2.oid = i.indexrelid
-            JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS x(indkey_attnum, ordinality) ON true
-            JOIN pg_attribute a ON a.attrelid = c1.oid AND a.attnum = x.indkey_attnum
             WHERE c1.oid = {}
             AND (i.indisunique OR i.indisprimary)
             AND i.indpred IS NULL
-            AND NOT EXISTS (
-                SELECT 1 FROM unnest(i.indkey) AS y(indkey_attnum)
-                JOIN pg_attribute a2 ON a2.attrelid = c1.oid AND a2.attnum = y.indkey_attnum
-                WHERE a2.attnotnull = false
-            )
-            GROUP BY c2.relname, i.indisprimary
             ORDER BY i.indisprimary DESC, c2.relname
-            LIMIT 1
             ",
             table_id
         );
 
-        for message in self.postgres_client.simple_query(&key_query).await? {
-            if let SimpleQueryMessage::Row(row) = message {
-                let index_name: String = row
-                    .get("index_name")
-                    .ok_or(ReplicationClientError::MissingColumn(
-                        "index_name".to_string(),
-                        "query_result".to_string(),
-                    ))?
-                    .to_string();
+        let result = self.postgres_client.simple_query(&query).await?;
 
-                let columns_str =
-                    row.get("columns")
-                        .ok_or(ReplicationClientError::MissingColumn(
-                            "columns".to_string(),
-                            "query_result".to_string(),
-                        ))?;
+        Ok(result
+            .into_iter()
+            .filter_map(|msg| match msg {
+                SimpleQueryMessage::Row(row) => Some(row),
+                _ => None,
+            })
+            .collect())
+    }
 
-                let columns: Vec<String> = columns_str
-                    .trim_matches('{')
-                    .trim_matches('}')
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .collect();
+    async fn fetch_index_columns(
+        &self,
+        table_id: TableId,
+        indkey: &str,
+    ) -> Result<Vec<(String, bool)>, ReplicationClientError> {
+        let query = format!(
+            "
+            SELECT a.attname, a.attnotnull
+            FROM pg_attribute a
+            WHERE a.attrelid = {}
+            AND a.attnum = ANY(string_to_array('{}', ' ')::smallint[])
+            ORDER BY array_position(string_to_array('{}', ' ')::smallint[], a.attnum)
+            ",
+            table_id, indkey, indkey
+        );
 
-                if columns
-                    .iter()
-                    .all(|name| published_column_names.contains(name.as_str()))
-                {
-                    return Ok(Some(LookupKey::Key {
-                        name: index_name,
-                        columns,
-                    }));
+        let result = self.postgres_client.simple_query(&query).await?;
+
+        Ok(result
+            .into_iter()
+            .filter_map(|msg| match msg {
+                SimpleQueryMessage::Row(row) => {
+                    let name = row.get("attname")?.to_string();
+                    let not_null = row.get("attnotnull") == Some("t");
+                    Some((name, not_null))
                 }
-            }
-        }
-        Ok(None)
+                _ => None,
+            })
+            .collect())
     }
 
     pub async fn get_lookup_key(
