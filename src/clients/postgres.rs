@@ -153,18 +153,19 @@ impl ReplicationClient {
             (
                 format!(
                     "with pub_attrs as (
-                        select unnest(r.prattrs)
+                        select unnest(r.prattrs) AS pub_attnum
                         from pg_publication_rel r
                         left join pg_publication p on r.prpubid = p.oid
-                        where p.pubname = {publication}
-                        and r.prrelid = {table_id}
+                        where p.pubname = {}
+                        and r.prrelid = {}
                     )",
-                    publication = quote_literal(publication),
+                    quote_literal(publication),
+                    table_id
                 ),
                 "and (
                     case (select count(*) from pub_attrs)
                     when 0 then true
-                    else (a.attnum in (select * from pub_attrs))
+                    else (a.attnum in (select pub_attnum from pub_attrs))
                     end
                 )",
             )
@@ -173,7 +174,7 @@ impl ReplicationClient {
         };
 
         let column_info_query = format!(
-            "{pub_cte}
+            "{}
             select a.attname,
                 a.atttypid,
                 a.atttypmod,
@@ -187,10 +188,11 @@ impl ReplicationClient {
             where a.attnum > 0::int2
             and not a.attisdropped
             and a.attgenerated = ''
-            and a.attrelid = {table_id}
-            {pub_pred}
+            and a.attrelid = {}
+            {}
             order by a.attnum
             ",
+            pub_cte, table_id, pub_pred
         );
 
         let mut column_schemas = vec![];
@@ -218,7 +220,6 @@ impl ReplicationClient {
                     .parse()
                     .map_err(|_| ReplicationClientError::OidColumnNotU32)?;
 
-                //TODO: For now we assume all types are simple, fix it later
                 let typ = Type::from_oid(type_oid).unwrap_or(Type::new(
                     format!("unnamed(oid: {type_oid})"),
                     type_oid,
@@ -270,29 +271,41 @@ impl ReplicationClient {
             FROM pg_index i
             JOIN pg_class c1 ON c1.oid = i.indrelid
             JOIN pg_class c2 ON c2.oid = i.indexrelid
-            JOIN unnest(i.indkey) WITH ORDINALITY AS x(attnum, ordinality)
-            JOIN pg_attribute a ON a.attrelid = c1.oid AND a.attnum = x.attnum
-            WHERE c1.oid = {table_id}
+            JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS x(indkey_attnum, ordinality) ON true
+            JOIN pg_attribute a ON a.attrelid = c1.oid AND a.attnum = x.indkey_attnum
+            WHERE c1.oid = {}
             AND (i.indisunique OR i.indisprimary)
             AND i.indpred IS NULL
             AND NOT EXISTS (
-                SELECT 1 FROM unnest(i.indkey) attnum
-                JOIN pg_attribute a2 ON a2.attrelid = c1.oid AND a2.attnum = attnum
+                SELECT 1 FROM unnest(i.indkey) AS y(indkey_attnum)
+                JOIN pg_attribute a2 ON a2.attrelid = c1.oid AND a2.attnum = y.indkey_attnum
                 WHERE a2.attnotnull = false
             )
             GROUP BY c2.relname, i.indisprimary
             ORDER BY i.indisprimary DESC, c2.relname
             LIMIT 1
             ",
+            table_id
         );
 
         for message in self.postgres_client.simple_query(&key_query).await? {
             if let SimpleQueryMessage::Row(row) = message {
-                let index_name: String =
-                    row.get("index_name").unwrap_or("unnamed_index").to_string();
-                let columns: Vec<String> = row
-                    .get("columns")
-                    .unwrap_or("")
+                let index_name: String = row
+                    .get("index_name")
+                    .ok_or(ReplicationClientError::MissingColumn(
+                        "index_name".to_string(),
+                        "query_result".to_string(),
+                    ))?
+                    .to_string();
+
+                let columns_str =
+                    row.get("columns")
+                        .ok_or(ReplicationClientError::MissingColumn(
+                            "columns".to_string(),
+                            "query_result".to_string(),
+                        ))?;
+
+                let columns: Vec<String> = columns_str
                     .trim_matches('{')
                     .trim_matches('}')
                     .split(',')
