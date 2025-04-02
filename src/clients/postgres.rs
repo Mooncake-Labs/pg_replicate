@@ -256,7 +256,7 @@ impl ReplicationClient {
         Ok(column_schemas)
     }
 
-    async fn query_lookup_key(
+    async fn fetch_lookup_key(
         &self,
         table_id: TableId,
         published_column_names: HashSet<String>,
@@ -369,7 +369,7 @@ impl ReplicationClient {
     ) -> Result<LookupKey, ReplicationClientError> {
         let column_names: HashSet<String> =
             column_schemas.iter().map(|cs| cs.name.clone()).collect();
-        if let Some(unique_index_key) = self.query_lookup_key(table_id, column_names).await? {
+        if let Some(unique_index_key) = self.fetch_lookup_key(table_id, column_names).await? {
             return Ok(unique_index_key);
         }
 
