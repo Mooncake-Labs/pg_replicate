@@ -20,22 +20,22 @@ gcp-bigquery-client = { version = "0.25.0", optional = true, features = [
 ] }
 pg_escape = "0.1.1"
 pin-project-lite = "0.2"
-postgres-protocol = { git = "https://github.com/imor/rust-postgres", rev = "20265ef38e32a06f76b6f9b678e2077fc2211f6b" }
-postgres-replication = { git = "https://github.com/imor/rust-postgres", rev = "20265ef38e32a06f76b6f9b678e2077fc2211f6b" }
 prost = { version = "0.13.1", optional = true }
 rustls = { version = "0.23.12", features = ["aws-lc-rs", "logging"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["std"] }
 thiserror = "1.0"
 tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
-tokio-postgres = { git = "https://github.com/imor/rust-postgres", features = [
-    "runtime",
-    "with-chrono-0_4",
-    "with-uuid-1",
-    "with-serde_json-1",
-], rev = "20265ef38e32a06f76b6f9b678e2077fc2211f6b" }
 tracing = { version = "0.1", default-features = true }
 uuid = { version = "1.10.0", features = ["v4"] }
+tokio-postgres = { git = "ssh://git@github.com/Mooncake-labs/rust-postgres.git", features = [
+  "runtime",
+  "with-chrono-0_4",
+  "with-uuid-1",
+  "with-serde_json-1",
+]}
+postgres-protocol = { git = "ssh://git@github.com/Mooncake-labs/rust-postgres.git" }
+postgres-replication = { git = "ssh://git@github.com/Mooncake-labs/rust-postgres.git" }
 
 [dev-dependencies]
 anyhow = "1.0"

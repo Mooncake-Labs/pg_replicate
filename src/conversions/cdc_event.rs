@@ -3,7 +3,8 @@ use std::{collections::HashMap, str::Utf8Error};
 
 use postgres_replication::protocol::{
     BeginBody, CommitBody, DeleteBody, InsertBody, LogicalReplicationMessage, RelationBody,
-    ReplicationMessage, TupleData, TypeBody, UpdateBody,
+    ReplicationMessage, StreamAbortBody, StreamCommitBody, StreamStartBody, StreamStopBody,
+    TupleData, TypeBody, UpdateBody,
 };
 use thiserror::Error;
 
@@ -58,9 +59,6 @@ impl CdcEventConverter {
             let cell = match &tuple_data[i] {
                 TupleData::Null => Cell::Null,
                 TupleData::UnchangedToast => TextFormatConverter::default_value(&column_schema.typ),
-                TupleData::Binary(_) => {
-                    return Err(CdcEventConversionError::BinaryFormatNotSupported)
-                }
                 TupleData::Text(bytes) => {
                     let str = str::from_utf8(&bytes[..])?;
                     TextFormatConverter::try_from_str(&column_schema.typ, str)?
@@ -80,7 +78,7 @@ impl CdcEventConverter {
         let row =
             Self::try_from_tuple_data_slice(column_schemas, insert_body.tuple().tuple_data())?;
 
-        Ok(CdcEvent::Insert((table_id, row)))
+        Ok(CdcEvent::Insert((table_id, row, insert_body.xid())))
     }
 
     //TODO: handle when identity columns are changed
@@ -96,7 +94,12 @@ impl CdcEventConverter {
         let new_row =
             Self::try_from_tuple_data_slice(column_schemas, update_body.new_tuple().tuple_data())?;
 
-        Ok(CdcEvent::Update((table_id, old_row, new_row)))
+        Ok(CdcEvent::Update((
+            table_id,
+            old_row,
+            new_row,
+            update_body.xid(),
+        )))
     }
 
     fn try_from_delete_body(
@@ -111,7 +114,7 @@ impl CdcEventConverter {
 
         let row = Self::try_from_tuple_data_slice(column_schemas, tuple.tuple_data())?;
 
-        Ok(CdcEvent::Delete((table_id, row)))
+        Ok(CdcEvent::Delete((table_id, row, delete_body.xid())))
     }
 
     pub fn try_from(
@@ -168,6 +171,18 @@ impl CdcEventConverter {
                 LogicalReplicationMessage::Truncate(_) => {
                     Err(CdcEventConversionError::MessageNotSupported)
                 }
+                LogicalReplicationMessage::StreamStart(stream_start_body) => {
+                    Ok(CdcEvent::StreamStart(stream_start_body))
+                }
+                LogicalReplicationMessage::StreamStop(stream_stop_body) => {
+                    Ok(CdcEvent::StreamStop(stream_stop_body))
+                }
+                LogicalReplicationMessage::StreamCommit(stream_commit_body) => {
+                    Ok(CdcEvent::StreamCommit(stream_commit_body))
+                }
+                LogicalReplicationMessage::StreamAbort(stream_abort_body) => {
+                    Ok(CdcEvent::StreamAbort(stream_abort_body))
+                }
                 _ => Err(CdcEventConversionError::UnknownReplicationMessage),
             },
             ReplicationMessage::PrimaryKeepAlive(keep_alive) => Ok(CdcEvent::KeepAliveRequested {
@@ -182,19 +197,27 @@ impl CdcEventConverter {
 pub enum CdcEvent {
     Begin(BeginBody),
     Commit(CommitBody),
-    Insert((TableId, TableRow)),
-    Update((TableId, Option<TableRow>, TableRow)),
-    Delete((TableId, TableRow)),
+    Insert((TableId, TableRow, Option<u32>)),
+    Update((TableId, Option<TableRow>, TableRow, Option<u32>)),
+    Delete((TableId, TableRow, Option<u32>)),
     Relation(RelationBody),
     Type(TypeBody),
     KeepAliveRequested { reply: bool },
+    StreamStart(StreamStartBody),
+    StreamStop(StreamStopBody),
+    StreamCommit(StreamCommitBody),
+    StreamAbort(StreamAbortBody),
 }
 
 impl BatchBoundary for CdcEvent {
     fn is_last_in_batch(&self) -> bool {
         matches!(
             self,
-            CdcEvent::Commit(_) | CdcEvent::KeepAliveRequested { reply: _ }
+            CdcEvent::Commit(_)
+                | CdcEvent::StreamCommit(_)
+                | CdcEvent::StreamStop(_)
+                | CdcEvent::StreamAbort(_)
+                | CdcEvent::KeepAliveRequested { reply: _ }
         )
     }
 }
