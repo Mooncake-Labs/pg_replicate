@@ -78,7 +78,7 @@ impl CdcEventConverter {
         let row =
             Self::try_from_tuple_data_slice(column_schemas, insert_body.tuple().tuple_data())?;
 
-        Ok(CdcEvent::Insert((table_id, row)))
+        Ok(CdcEvent::Insert((table_id, row, insert_body.xid())))
     }
 
     //TODO: handle when identity columns are changed
@@ -94,7 +94,12 @@ impl CdcEventConverter {
         let new_row =
             Self::try_from_tuple_data_slice(column_schemas, update_body.new_tuple().tuple_data())?;
 
-        Ok(CdcEvent::Update((table_id, old_row, new_row)))
+        Ok(CdcEvent::Update((
+            table_id,
+            old_row,
+            new_row,
+            update_body.xid(),
+        )))
     }
 
     fn try_from_delete_body(
@@ -109,7 +114,7 @@ impl CdcEventConverter {
 
         let row = Self::try_from_tuple_data_slice(column_schemas, tuple.tuple_data())?;
 
-        Ok(CdcEvent::Delete((table_id, row)))
+        Ok(CdcEvent::Delete((table_id, row, delete_body.xid())))
     }
 
     pub fn try_from(
@@ -192,9 +197,9 @@ impl CdcEventConverter {
 pub enum CdcEvent {
     Begin(BeginBody),
     Commit(CommitBody),
-    Insert((TableId, TableRow)),
-    Update((TableId, Option<TableRow>, TableRow)),
-    Delete((TableId, TableRow)),
+    Insert((TableId, TableRow, Option<u32>)),
+    Update((TableId, Option<TableRow>, TableRow, Option<u32>)),
+    Delete((TableId, TableRow, Option<u32>)),
     Relation(RelationBody),
     Type(TypeBody),
     KeepAliveRequested { reply: bool },
