@@ -636,7 +636,7 @@ impl ReplicationClient {
             .copy_both_simple::<bytes::Bytes>(&query)
             .await?;
 
-        let stream = LogicalReplicationStream::new(copy_stream);
+        let stream = LogicalReplicationStream::new(copy_stream, Some(2));
 
         Ok(stream)
     }
