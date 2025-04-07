@@ -3,7 +3,8 @@ use std::{collections::HashMap, str::Utf8Error};
 
 use postgres_replication::protocol::{
     BeginBody, CommitBody, DeleteBody, InsertBody, LogicalReplicationMessage, RelationBody,
-    ReplicationMessage, TupleData, TypeBody, UpdateBody,
+    ReplicationMessage, StreamAbortBody, StreamCommitBody, StreamStartBody, StreamStopBody,
+    TupleData, TypeBody, UpdateBody,
 };
 use thiserror::Error;
 
@@ -58,9 +59,6 @@ impl CdcEventConverter {
             let cell = match &tuple_data[i] {
                 TupleData::Null => Cell::Null,
                 TupleData::UnchangedToast => TextFormatConverter::default_value(&column_schema.typ),
-                TupleData::Binary(_) => {
-                    return Err(CdcEventConversionError::BinaryFormatNotSupported)
-                }
                 TupleData::Text(bytes) => {
                     let str = str::from_utf8(&bytes[..])?;
                     TextFormatConverter::try_from_str(&column_schema.typ, str)?
@@ -168,6 +166,18 @@ impl CdcEventConverter {
                 LogicalReplicationMessage::Truncate(_) => {
                     Err(CdcEventConversionError::MessageNotSupported)
                 }
+                LogicalReplicationMessage::StreamStart(stream_start_body) => {
+                    Ok(CdcEvent::StreamStart(stream_start_body))
+                }
+                LogicalReplicationMessage::StreamStop(stream_stop_body) => {
+                    Ok(CdcEvent::StreamStop(stream_stop_body))
+                }
+                LogicalReplicationMessage::StreamCommit(stream_commit_body) => {
+                    Ok(CdcEvent::StreamCommit(stream_commit_body))
+                }
+                LogicalReplicationMessage::StreamAbort(stream_abort_body) => {
+                    Ok(CdcEvent::StreamAbort(stream_abort_body))
+                }
                 _ => Err(CdcEventConversionError::UnknownReplicationMessage),
             },
             ReplicationMessage::PrimaryKeepAlive(keep_alive) => Ok(CdcEvent::KeepAliveRequested {
@@ -188,13 +198,21 @@ pub enum CdcEvent {
     Relation(RelationBody),
     Type(TypeBody),
     KeepAliveRequested { reply: bool },
+    StreamStart(StreamStartBody),
+    StreamStop(StreamStopBody),
+    StreamCommit(StreamCommitBody),
+    StreamAbort(StreamAbortBody),
 }
 
 impl BatchBoundary for CdcEvent {
     fn is_last_in_batch(&self) -> bool {
         matches!(
             self,
-            CdcEvent::Commit(_) | CdcEvent::KeepAliveRequested { reply: _ }
+            CdcEvent::Commit(_)
+                | CdcEvent::StreamCommit(_)
+                | CdcEvent::StreamStop(_)
+                | CdcEvent::StreamAbort(_)
+                | CdcEvent::KeepAliveRequested { reply: _ }
         )
     }
 }
